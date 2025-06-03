@@ -56,26 +56,29 @@ class AttentionGNNLayer(nn.Module):
         h = (h + 1) // 2
         h = h.astype(int)
         h_embd = nn.Embed(2, self.n_embd)(h)
-        messages = jnp.array([
-            MLP(self.out_features)(
-                jnp.concatenate(
-                    (
-                        h_embd[:, self.receivers[j], :],
-                        h_embd[:, self.senders[j], :],
-                    ),
-                    axis = -1
-                )
-            )
-            for j in range(len(self.senders))
-        ])
+        receiver_features = h_embd[:, self.receivers, :]  # shape (batch, num_edges, n_embd)
+        sender_features = h_embd[:, self.senders, :]      # same shape
+
+        edge_features = jnp.concatenate([receiver_features, sender_features], axis=-1)  # (batch, num_edges, 2 * n_embd)
+
+        # Apply MLP once on whole array:
+        messages = MLP(self.out_features)(edge_features)  # (batch, num_edges, out_features)
+
         if self.use_attention:
             q = nn.Dense(self.out_features)(h)
             k = nn.Dense(self.out_features)(h)
             a = jnp.dot(q, k.transpose())
 
             messages = messages * a[..., None]
-        aggregated = jax.ops.segment_sum(messages, self.receivers, h.shape[0])
-        return nn.relu(aggregated)
+
+        aggregated = jax.vmap(self.aggregate_one_batch, in_axes=(0, 0, None))(h, messages, self.receivers)
+
+
+        return nn.relu(sum(aggregated))
+    
+
+    def aggregate_one_batch(self, h_batch, messages_batch, receivers):
+        return jax.ops.segment_sum(messages_batch, receivers, num_segments=h_batch.shape[0])
 
 
 class GraphAttentionGNN(nn.Module):
