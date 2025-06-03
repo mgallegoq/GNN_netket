@@ -23,11 +23,10 @@ sa = nk.sampler.MetropolisLocal(hi)
 vs = nk.vqs.MCState(sa, model, n_samples=1024)
 
 # Disordered Heisenberg model (example)
-J = np.random.normal(0, 1, size=(g.n_edges,))
 H = -sum(sigmaz(hi, i) for i in range(N))
 
 # Optimizer and VMC
-opt = nk.optimizer.Sgd(learning_rate=1e-3)
+opt = nk.optimizer.Adam(learning_rate=1e-4)
 gs = nk.VMC(H, opt, variational_state=vs)
 
 gs.run(1000)
