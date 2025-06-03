@@ -65,16 +65,15 @@ class AttentionGNNLayer(nn.Module):
         messages = MLP(self.out_features)(edge_features)  # (batch, num_edges, out_features)
 
         if self.use_attention:
-            q = nn.Dense(self.out_features)(h)
-            k = nn.Dense(self.out_features)(h)
-            a = jnp.dot(q, k.transpose())
+            q = nn.Dense(self.out_features)(sender_features)
+            k = nn.Dense(self.out_features)(receiver_features)
+            a = jnp.sum(q * k, axis=-1, keepdims=True)  # shape: (batch, n_edges, 1)
+            messages = messages * nn.sigmoid(a)  # or use softmax over edges
 
-            messages = messages * a[..., None]
-
-        aggregated = jax.vmap(self.aggregate_one_batch, in_axes=(0, 0, None))(h, messages, self.receivers)
+        aggregated = jax.vmap(self.aggregate_one_batch, in_axes=(0, 0, None))(h_embd, messages, self.receivers)
 
 
-        return nn.relu(sum(aggregated))
+        return sum(nn.relu(aggregated))
     
 
     def aggregate_one_batch(self, h_batch, messages_batch, receivers):
@@ -111,22 +110,20 @@ class GraphAttentionGNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        for _ in range(self.layers):
 
-        x = x.astype(jnp.float32)
-        batch = x.ndim == 2
-        h = x if batch else x[None, :]
+            x = x.astype(jnp.float32)
+            batch = x.ndim == 2
+            h = x if batch else x[None, :]
 
-        senders = jnp.concatenate(
-            (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
-        )
-        receivers = jnp.concatenate(
-            (jnp.array(self.graph.edges())[:, 1], jnp.array(self.graph.edges())[:, 0])
-        )
+            senders = jnp.concatenate(
+                (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
+            )
+            receivers = jnp.concatenate(
+                (jnp.array(self.graph.edges())[:, 1], jnp.array(self.graph.edges())[:, 0])
+            )
+            h = AttentionGNNLayer(self.features, senders, receivers, self.use_attention)(h)
 
-        worker = AttentionGNNLayer(
-            self.features, senders, receivers, self.use_attention
-        )
-        h = worker(h)
 
         h_sum = jnp.sum(h, axis=1 if batch else 0).squeeze()
         log_amp = nn.Dense(1)(h_sum).squeeze(-1)
