@@ -57,7 +57,6 @@ class AttentionGNNLayer(nn.Module):
             a = jnp.dot(q, k.transpose())
 
             messages = messages * a[..., None]
-        print(h, messages)
         aggregated = jax.ops.segment_sum(messages, self.receivers, h.shape[0])
         return nn.relu(aggregated)
 
@@ -96,6 +95,7 @@ class GraphAttentionGNN(nn.Module):
         x = x.astype(jnp.float32)
         batch = x.ndim == 2
         h = x if batch else x[None, :]
+
         senders = jnp.concatenate(
             (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
         )
@@ -108,10 +108,22 @@ class GraphAttentionGNN(nn.Module):
         )
         h = worker(h)
 
-        h_sum = jnp.sum(h, axis=1 if batch else 0)
+        h_sum = jnp.sum(h, axis=1 if batch else 0).squeeze()
         log_amp = nn.Dense(1)(h_sum).squeeze(-1)
 
         if self.output_phase:
             phase = nn.Dense(1)(h_sum).squeeze(-1)
             return log_amp + 1j * phase
         return log_amp
+
+class BatchGNN(nn.Module):
+    graph: Any
+    layers: int = 1
+    features: int = 64
+    use_attention: bool = True
+    output_phase: bool = True
+
+    @nn.compact
+    def __call__(self, x):
+        worker = GraphAttentionGNN(self.graph, self.layers, self.features, self.use_attention, self.output_phase)
+        return jax.vmap(worker, in_axes=0)(x)
