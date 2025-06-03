@@ -19,6 +19,14 @@ import jax
 import jax.numpy as jnp
 
 
+class MLP(nn.Module):
+    features: int
+
+    @nn.compact
+    def __call__(self, x):
+        return nn.relu(nn.Dense(self.features)(x))
+
+
 class AttentionGNNLayer(nn.Module):
     """
     Single GNN message-passing layer with optional self-attention.
@@ -28,7 +36,7 @@ class AttentionGNNLayer(nn.Module):
         use_attention (bool): Whether to use an attention mechanism on edges.
 
     Inputs:
-        h (jnp.ndarray): Node features of shape (n_nodes, features).
+        h (jnp.ndarray): input of shape (n_batch, n_nodes).
         senders (jnp.ndarray): Indices of sending nodes for edges.
         receivers (jnp.ndarray): Indices of receiving nodes for edges.
 
@@ -40,17 +48,26 @@ class AttentionGNNLayer(nn.Module):
     senders: Any
     receivers: Any
     use_attention: bool = True
+    n_embd = 5
 
     @nn.compact
     def __call__(self, h):
-        w = self.param(
-            "W", nn.initializers.xavier_uniform(), (h.shape[-1], self.out_features)
-        )
         assert h.ndim == 2, f"Expected h to be 2D, got shape {h.shape}"
-        h_proj = jnp.dot(h, w)
-
-        messages = h_proj[:, self.senders]
-
+        h = (h + 1) // 2
+        h = h.astype(int)
+        h_embd = nn.Embed(2, self.n_embd)(h)
+        messages = jnp.array([
+            MLP(self.out_features)(
+                jnp.concatenate(
+                    (
+                        h_embd[:, self.receivers[j], :],
+                        h_embd[:, self.senders[j], :],
+                    ),
+                    axis = -1
+                )
+            )
+            for j in range(len(self.senders))
+        ])
         if self.use_attention:
             q = nn.Dense(self.out_features)(h)
             k = nn.Dense(self.out_features)(h)
@@ -116,6 +133,7 @@ class GraphAttentionGNN(nn.Module):
             return log_amp + 1j * phase
         return log_amp
 
+
 class BatchGNN(nn.Module):
     graph: Any
     layers: int = 1
@@ -125,5 +143,11 @@ class BatchGNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        worker = GraphAttentionGNN(self.graph, self.layers, self.features, self.use_attention, self.output_phase)
+        worker = GraphAttentionGNN(
+            self.graph,
+            self.layers,
+            self.features,
+            self.use_attention,
+            self.output_phase,
+        )
         return jax.vmap(worker, in_axes=0)(x)
