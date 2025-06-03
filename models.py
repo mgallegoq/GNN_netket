@@ -18,6 +18,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
+
 class AttentionGNNLayer(nn.Module):
     """
     Single GNN message-passing layer with optional self-attention.
@@ -57,7 +58,7 @@ class AttentionGNNLayer(nn.Module):
 
             messages = messages * a[..., None]
         print(h, messages)
-        aggregated = jax.ops.segment_sum(messages, self.receivers, h.shape[1])
+        aggregated = jax.ops.segment_sum(messages, self.receivers, h.shape[0])
         return nn.relu(aggregated)
 
 
@@ -91,14 +92,20 @@ class GraphAttentionGNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-    
+
         x = x.astype(jnp.float32)
         batch = x.ndim == 2
         h = x if batch else x[None, :]
-        senders= jnp.array(self.graph.edges())[:, 0]
-        receivers= jnp.array(self.graph.edges())[:, 1]
+        senders = jnp.concatenate(
+            (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
+        )
+        receivers = jnp.concatenate(
+            (jnp.array(self.graph.edges())[:, 1], jnp.array(self.graph.edges())[:, 0])
+        )
 
-        worker = AttentionGNNLayer(self.features, senders, receivers, self.use_attention)
+        worker = AttentionGNNLayer(
+            self.features, senders, receivers, self.use_attention
+        )
         h = worker(h)
 
         h_sum = jnp.sum(h, axis=1 if batch else 0)
@@ -108,4 +115,3 @@ class GraphAttentionGNN(nn.Module):
             phase = nn.Dense(1)(h_sum).squeeze(-1)
             return log_amp + 1j * phase
         return log_amp
-

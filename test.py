@@ -3,9 +3,9 @@ import numpy as np
 
 from models import GraphAttentionGNN
 
-N = 10
+N = 20
 g = nk.graph.Hypercube(length=N, n_dim=1)
-
+print(g.n_nodes)
 hi = nk.hilbert.Spin(s=0.5, N=N)
 model = GraphAttentionGNN(
     graph = g,
