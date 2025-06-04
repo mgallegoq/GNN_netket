@@ -25,11 +25,12 @@ print(f'number of parameters: {vs.n_parameters}')
 # Disordered Heisenberg model (example)
 H = -sum(sigmaz(hi, i)*sigmaz(hi, i+1) for i in range(N-1))
 H += -0.5*sum(sigmax(hi, i) for i in range(N))
+H += -sigmaz(hi, 0)*sigmaz(hi, N-1)
 
 # RBM Energy=-17.1757+0.0000j ± 0.0080 σ²=0.0646
 
 # Optimizer and VMC
-opt = nk.optimizer.Adam(learning_rate = 1e-3)
+opt = nk.optimizer.Sgd(learning_rate = 5e-3)
 gs = nk.VMC(H, opt, variational_state=vs)
 
 gs.run(300)

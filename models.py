@@ -17,6 +17,9 @@ from typing import Any
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import netket as nk
+
+REAL_DTYPE = jnp.asarray(1.0).dtype
 
 
 class MLP(nn.Module):
@@ -25,6 +28,77 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         return nn.relu(nn.Dense(self.features)(x))
+
+
+class FFN(nn.Module):
+    """
+    Feed Forward Network defined as in https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.131.036502.
+    alpha represents the number of hidden units in each layer and mu the number of layers
+    The parameters (weights and biases) are defined as complex.
+    """
+
+    alpha: int = 1
+    mu: int = 1
+
+    @nn.compact
+    def __call__(self, x):
+        y = x
+        for l in range(self.mu):
+            dense = nn.Dense(
+                features=self.alpha * x.shape[-1],
+                param_dtype=REAL_DTYPE,
+                kernel_init=nn.initializers.normal(stddev=0.1),
+                bias_init=nn.initializers.normal(stddev=0.1),
+            )
+            y = dense(y)
+            y = nk.nn.reim_selu(y)
+
+        return jnp.log(jnp.sum(jnp.exp(y), axis=-1))
+
+
+class BatchedFFN(nn.Module):
+    alpha: int = 1
+    mu: int = 1
+
+    @nn.compact
+    def __call__(self, batched_x):
+        worker = FFN(alpha=self.alpha, mu=self.mu)
+
+        return jax.vmap(worker, in_axes=0)(batched_x)
+
+
+class FFNClassifier(nn.Module):
+    """
+    Feed-Forward Network (FFN) for binary classification.
+    Outputs +1 or -1 using a final sign activation.
+
+    Attributes:
+        alpha (int): Width multiplier for hidden layers.
+        mu (int): Number of hidden layers.
+    """
+
+    alpha: int = 1
+    mu: int = 1
+
+    @nn.compact
+    def __call__(self, x):
+        for _ in range(self.mu):
+            x = nn.Dense(
+                features=self.alpha * x.shape[-1],
+                param_dtype=REAL_DTYPE,
+                kernel_init=nn.initializers.normal(stddev=0.1),
+                bias_init=nn.initializers.normal(stddev=0.1),
+            )(x)
+            x = nn.selu(x)
+        # Final classification layer
+        x = nn.Dense(
+            features=2,
+            param_dtype=REAL_DTYPE,
+            kernel_init=nn.initializers.normal(stddev=0.1),
+            bias_init=nn.initializers.normal(stddev=0.1),
+        )(x)
+        x = nn.softmax(x)
+        return jnp.squeeze(x[..., 1] * jnp.pi)
 
 
 class AttentionGNNLayer(nn.Module):
@@ -47,37 +121,43 @@ class AttentionGNNLayer(nn.Module):
     out_features: int
     senders: Any
     receivers: Any
+    layers: int = 1
+
     use_attention: bool = True
     n_embd = 5
 
     @nn.compact
-    def __call__(self, h):
-        assert h.ndim == 2, f"Expected h to be 2D, got shape {h.shape}"
-        h = (h + 1) // 2
-        h = h.astype(int)
-        h_embd = nn.Embed(2, self.n_embd)(h)
-        receiver_features = h_embd[:, self.receivers, :]  # shape (batch, num_edges, n_embd)
-        sender_features = h_embd[:, self.senders, :]      # same shape
+    def __call__(self, h_embd):
+        for _ in range(self.layers):
+            receiver_features = h_embd[
+                self.receivers, :
+            ]  # shape (batch, num_edges, n_embd)
+            sender_features = h_embd[self.senders, :]  # same shape
 
-        edge_features = jnp.concatenate([receiver_features, sender_features], axis=-1)  # (batch, num_edges, 2 * n_embd)
+            edge_features = jnp.concatenate(
+                [receiver_features, sender_features], axis=-1
+            )  # (batch, num_edges, 2 * n_embd)
 
-        # Apply MLP once on whole array:
-        messages = MLP(self.out_features)(edge_features)  # (batch, num_edges, out_features)
+            # Apply MLP once on whole array:
+            messages = MLP(self.out_features)(
+                edge_features
+            )  # (batch, num_edges, out_features)
 
-        if self.use_attention:
-            q = nn.Dense(self.out_features)(sender_features)
-            k = nn.Dense(self.out_features)(receiver_features)
-            a = jnp.sum(q * k, axis=-1, keepdims=True)  # shape: (batch, n_edges, 1)
-            messages = messages * nn.sigmoid(a)  # or use softmax over edges
+            if self.use_attention:
+                q = nn.Dense(self.out_features)(sender_features)
+                k = nn.Dense(self.out_features)(receiver_features)
+                a = jnp.sum(q * k, axis=-1, keepdims=True)  # shape: (batch, n_edges, 1)
+                messages = messages * nn.sigmoid(a)  # or use softmax over edges
 
-        aggregated = jax.vmap(self.aggregate_one_batch, in_axes=(0, 0, None))(h_embd, messages, self.receivers)
+            aggregated = self.aggregate_messages(h_embd, messages, self.receivers)
+            h_embd = aggregated
 
+        return nn.relu(aggregated)
 
-        return sum(nn.relu(aggregated))
-    
-
-    def aggregate_one_batch(self, h_batch, messages_batch, receivers):
-        return jax.ops.segment_sum(messages_batch, receivers, num_segments=h_batch.shape[0])
+    def aggregate_messages(self, h_batch, messages_batch, receivers):
+        return jax.ops.segment_sum(
+            messages_batch, receivers, num_segments=h_batch.shape[0]
+        )
 
 
 class GraphAttentionGNN(nn.Module):
@@ -107,29 +187,31 @@ class GraphAttentionGNN(nn.Module):
     features: int = 64
     use_attention: bool = True
     output_phase: bool = True
+    n_embd = 5
 
     @nn.compact
-    def __call__(self, x):
-        for _ in range(self.layers):
-
-            x = x.astype(jnp.float32)
-            batch = x.ndim == 2
-            h = x if batch else x[None, :]
-
-            senders = jnp.concatenate(
-                (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
-            )
-            receivers = jnp.concatenate(
-                (jnp.array(self.graph.edges())[:, 1], jnp.array(self.graph.edges())[:, 0])
-            )
-            h = AttentionGNNLayer(self.features, senders, receivers, self.use_attention)(h)
-
-
-        h_sum = jnp.sum(h, axis=1 if batch else 0).squeeze()
-        log_amp = nn.Dense(1)(h_sum).squeeze(-1)
+    def __call__(self, h):
+        h = (h + 1) // 2
+        h = h.astype(int)
+        h_embd = nn.Embed(2, self.n_embd)(h)
+        senders = jnp.concatenate(
+            (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
+        )
+        receivers = jnp.concatenate(
+            (jnp.array(self.graph.edges())[:, 1], jnp.array(self.graph.edges())[:, 0])
+        )
+        h_embd = AttentionGNNLayer(
+            self.features,
+            senders,
+            receivers,
+            layers=self.layers,
+            use_attention=self.use_attention,
+        )(h_embd)
+        h_sum = jnp.sum(h_embd, axis=1).squeeze()
+        log_amp = FFN(1, 1)(h_sum)
 
         if self.output_phase:
-            phase = nn.Dense(1)(h_sum).squeeze(-1)
+            phase = FFNClassifier(h_sum).squeeze(-1)
             return log_amp + 1j * phase
         return log_amp
 
