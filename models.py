@@ -12,7 +12,7 @@ Classes:
                          spin configurations to log wavefunction amplitudes.
 """
 
-from typing import Any
+from typing import Any, Sequence
 
 import flax.linen as nn
 import jax
@@ -119,6 +119,7 @@ class AttentionGNNLayer(nn.Module):
     """
 
     out_features: int
+    couplings: Sequence
     senders: Any
     receivers: Any
     layers: int = 1
@@ -131,22 +132,22 @@ class AttentionGNNLayer(nn.Module):
         for _ in range(self.layers):
             receiver_features = h_embd[
                 self.receivers, :
-            ]  # shape (batch, num_edges, n_embd)
+            ]  # shape (num_edges, n_embd)
             sender_features = h_embd[self.senders, :]  # same shape
-
+            mod_couplings = jnp.concatenate((jnp.array(self.couplings), jnp.array(self.couplings)))[:, None] # (num_edges, 1)
             edge_features = jnp.concatenate(
-                [receiver_features, sender_features], axis=-1
-            )  # (batch, num_edges, 2 * n_embd)
+                [receiver_features, sender_features, mod_couplings], axis=-1
+            )  # (num_edges, 2 * n_embd)
 
             # Apply MLP once on whole array:
             messages = MLP(self.out_features)(
                 edge_features
-            )  # (batch, num_edges, out_features)
+            )  # (num_edges, out_features)
 
             if self.use_attention:
                 q = nn.Dense(self.out_features)(sender_features)
                 k = nn.Dense(self.out_features)(receiver_features)
-                a = jnp.sum(q * k, axis=-1, keepdims=True)  # shape: (batch, n_edges, 1)
+                a = jnp.sum(q * k, axis=-1, keepdims=True)  # shape: (n_edges, 1)
                 messages = messages * nn.sigmoid(a)  # or use softmax over edges
 
             aggregated = self.aggregate_messages(h_embd, messages, self.receivers)
@@ -183,6 +184,7 @@ class GraphAttentionGNN(nn.Module):
     """
 
     graph: Any
+    couplings: Sequence
     layers: int = 1
     features: int = 64
     use_attention: bool = True
@@ -202,6 +204,7 @@ class GraphAttentionGNN(nn.Module):
         )
         h_embd = AttentionGNNLayer(
             self.features,
+            self.couplings,
             senders,
             receivers,
             layers=self.layers,
@@ -218,6 +221,7 @@ class GraphAttentionGNN(nn.Module):
 
 class BatchGNN(nn.Module):
     graph: Any
+    couplings: Sequence
     layers: int = 1
     features: int = 64
     use_attention: bool = True
@@ -227,6 +231,7 @@ class BatchGNN(nn.Module):
     def __call__(self, x):
         worker = GraphAttentionGNN(
             self.graph,
+            self.couplings,
             self.layers,
             self.features,
             self.use_attention,
