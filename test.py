@@ -1,7 +1,7 @@
 import netket as nk
 import numpy as np
 from netket.operator.spin import sigmax, sigmaz
-from models import BatchGNN
+from models import SymGNN
 
 N = 17
 g = nk.graph.Hypercube(length=N, n_dim=1)
@@ -23,7 +23,7 @@ H += -0.5*sum(sigmax(hi, i) for i in range(N))
 H += -J[-1]*sigmaz(hi, 0)*sigmaz(hi, N-1)
 
 # RBM Energy=-14.554+0.000j ± 0.018 [σ²=0.306, R̂=1.0068]]]
-model = BatchGNN(
+model = SymGNN(
     graph = g,
     couplings = tuple(J),
     layers= 2,

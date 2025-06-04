@@ -18,6 +18,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import netket as nk
+from jax.scipy.special import logsumexp
 
 REAL_DTYPE = jnp.asarray(1.0).dtype
 
@@ -238,3 +239,31 @@ class BatchGNN(nn.Module):
             self.output_phase,
         )
         return jax.vmap(worker, in_axes=0)(x)
+    
+class SymGNN(nn.Module):
+    graph: Any
+    couplings: Sequence
+    layers: int = 1
+    features: int = 64
+    use_attention: bool = True
+    output_phase: bool = True
+    trivial: bool = True
+
+    @nn.compact
+    def __call__(self, x) -> Any:
+        model = BatchGNN(
+            self.graph,
+            self.couplings,
+            self.layers,
+            self.features,
+            self.use_attention,
+            self.output_phase,
+        )
+
+        output_x = model(x)
+        output_inv_x = model(-1*x)
+        if self.trivial:
+            return logsumexp(jnp.array([output_x, output_inv_x]), axis = 0)
+        else:
+            return logsumexp(jnp.array([output_x, output_inv_x]), 
+            b=jnp.asarray([jnp.ones(output_x.shape[-1]), -jnp.ones(output_x.shape[-1])]), axis = 0)
