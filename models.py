@@ -44,29 +44,34 @@ class MLP(nn.Module):
 
 class FFN(nn.Module):
     """
-    Feed Forward Network defined as in
-    https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.131.036502.
+    Feed Forward Network
     alpha represents the number of hidden units in each layer and mu the number of layers
     The parameters (weights and biases) are defined as complex.
     """
-
     alpha: int = 1
     mu: int = 1
+    output_size: int = 0
 
     @nn.compact
     def __call__(self, x):
-        y = x
         for _ in range(self.mu):
-            dense = nn.Dense(
+            x = nn.Dense(
                 features=self.alpha * x.shape[-1],
                 param_dtype=REAL_DTYPE,
                 kernel_init=nn.initializers.normal(stddev=0.1),
                 bias_init=nn.initializers.normal(stddev=0.1),
-            )
-            y = dense(y)
-            y = nk.nn.swish(y)
-
-        return jnp.log(jnp.sum(jnp.exp(y), axis=-1))
+            )(x)
+            x = nn.selu(x)
+        if self.output_size == 0:
+            return x
+        else:
+            x = nn.Dense(
+                features=self.output_size,
+                param_dtype=REAL_DTYPE,
+                kernel_init=nn.initializers.normal(stddev=0.1),
+                bias_init=nn.initializers.normal(stddev=0.1),
+            )(x)
+            return nn.selu(x)
 
 
 class BatchedFFN(nn.Module):
@@ -125,6 +130,33 @@ class FFNClassifier(nn.Module):
         return jnp.squeeze(x[..., 1] * jnp.pi)
 
 
+"""
+Graph Neural Network with Attention for NetKet
+
+This module defines a flexible graph neural network (GNN) architecture with
+optional attention mechanisms for use as a variational ansatz in quantum
+many-body problems using the NetKet library. It is implemented using Flax
+and JAX and is compatible with NetKet ≥3.10.
+
+Classes:
+    - AttentionGNNLayer: Single message-passing layer with optional attention.
+    - GraphAttentionGNN: Full GNN model with stacked attention layers that maps
+                         spin configurations to log wavefunction amplitudes.
+"""
+
+
+import netket as nk
+import jax
+import jax.numpy as jnp
+import flax.linen as nn
+from jax.scipy.special import logsumexp
+from typing import Sequence, Callable, Any
+from jax.scipy.special import logsumexp
+
+REAL_DTYPE = jnp.asarray(1.0).dtype
+
+
+
 class AttentionGNNLayer(nn.Module):
     """
     Single GNN message-passing layer with optional self-attention.
@@ -166,15 +198,12 @@ class AttentionGNNLayer(nn.Module):
             )  # (num_edges, 2 * n_embd)
 
             # Apply MLP once on whole array:
-            messages = MLP(self.out_features)(
-                edge_features
-            )  # (num_edges, out_features)
-
+            messages = FFN(1, 1, self.out_features)(edge_features)  # (num_edges, out_features)
             if self.use_attention:
                 q = nn.Dense(self.out_features)(sender_features)
                 k = nn.Dense(self.out_features)(receiver_features)
                 a = jnp.sum(q * k, axis=-1, keepdims=True)  # shape: (n_edges, 1)
-                messages = messages * nn.sigmoid(a)  # or use softmax over edges
+                messages = messages * nn.softmax(a)  # or use softmax over edges
 
             aggregated = self.aggregate_messages(h_embd, messages, self.receivers)
             h_embd = aggregated
@@ -248,7 +277,7 @@ class GraphAttentionGNN(nn.Module):
             use_attention=self.use_attention,
         )(h_embd)
         h_sum = jnp.sum(h_embd, axis=1).squeeze()
-        log_amp = FFN(1, 1)(h_sum)
+        log_amp = jnp.sum(FFN(1, 2)(h_sum))
         if self.output_phase:
             phase = FFNClassifier()(h)
             return log_amp + 1j * phase
@@ -339,4 +368,6 @@ class SymGNN(nn.Module):
             ),
             axis=0,
         )
+
+
 
