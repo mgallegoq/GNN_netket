@@ -1,16 +1,17 @@
 """
-This module provides utility functions for constructing and analyzing directed graphs
-from weighted adjacency matrices. It includes:
+Graph Utilities for Directed Weighted Connectivity Analysis
 
-- Selection of the top-M strongest directed edges.
-- Checks for strong and undirected connectivity using NetworkX.
-- Visualization tools for directed graphs.
+This module provides utility functions for constructing, analyzing, and visualizing
+directed graphs derived from weighted adjacency matrices. It is intended for applications
+in scientific computing and machine learning that involve asymmetric connectivity structures.
 
-Typical use case involves working with asymmetric (directed) connectivity matrices
-in scientific computing or machine learning applications.
+Key functionalities include:
+
+- Extraction of the top-M strongest directed edges based on edge weight magnitude.
+- Connectivity checks in both directed and undirected contexts using NetworkX.
+- Visualization of directed graphs with optional edge weight annotations.
 """
 
-import time
 from typing import Tuple, Any
 
 import matplotlib.pyplot as plt
@@ -20,57 +21,57 @@ import numpy as np
 
 def top_m_edges_directed(weights: np.ndarray, m: int) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Selects the top-m strongest directed edges from a weighted adjacency matrix.
+    Extracts the top-m strongest directed edges from a weighted adjacency matrix.
 
     Args:
-        weights (np.ndarray): A square 2D array of shape (n, n) where J[i, j] is
-        the edge weight from i to j.
-        m (int): number of strongest edges to retain.
+        weights (np.ndarray): A square 2D array of shape (n, n), where weights[i, j]
+                              denotes the weight of the directed edge from node i to node j.
+        m (int): The number of strongest edges to select, based on absolute weight.
 
     Returns:
         Tuple[np.ndarray, np.ndarray]:
-            - edges: Array of shape (m, 2) with selected (sender, receiver) node pairs.
-            - weights: Array of shape (m,) with corresponding edge weights.
+            - edges: An array of shape (m, 2) containing (source, target) node pairs.
+            - weights: An array of shape (m,) with the corresponding edge weights.
     """
     n = weights.shape[0]
     assert weights.shape == (n, n)
 
-    all_senders, all_receivers = np.nonzero(~np.eye(n, dtype=bool))
-    strengths = np.abs(weights[all_senders, all_receivers])
+    senders, receivers = np.nonzero(~np.eye(n, dtype=bool))
+    strengths = np.abs(weights[senders, receivers])
 
     top_indices = np.argpartition(-strengths, m)[:m]
-    top_edges = np.stack([all_senders[top_indices], all_receivers[top_indices]], axis=1)
-    top_weights = weights[all_senders[top_indices], all_receivers[top_indices]]
+    top_edges = np.stack([senders[top_indices], receivers[top_indices]], axis=1)
+    top_weights = weights[senders[top_indices], receivers[top_indices]]
 
     return top_edges, top_weights
 
 
 def is_connected(n: int, edges: np.ndarray) -> bool:
     """
-    Checks whether a directed graph is strongly connected using networkX.
+    Checks whether the undirected version of a graph is connected.
 
     Args:
-        n (int): number of nodes in the graph.
-        edges (np.ndarray): Array of shape (E, 2) representing directed edges (sender, receiver).
+        n (int): The number of nodes in the graph.
+        edges (np.ndarray): An array of shape (E, 2) representing directed edges.
 
     Returns:
-        bool: True if the graph is strongly connected, False otherwise.
+        bool: True if the corresponding undirected graph is connected; False otherwise.
     """
     g = nx.Graph()
     g.add_nodes_from(range(n))
     g.add_edges_from(edges)
-
     return nx.is_connected(g)
 
 
 def plot_directed_graph(n: int, edges: np.ndarray, edge_weights: np.ndarray = None):
     """
-    Plots a directed graph given node count and a list of edges.
+    Visualizes a directed graph using a spring layout.
 
     Args:
-        n (int): number of nodes.
-        edges (np.ndarray): Array of shape (E, 2) with directed edges (sender, receiver).
-        edge_weights (np.ndarray, optional): Array of shape (E,) with edge weights to display.
+        n (int): The number of nodes in the graph.
+        edges (np.ndarray): An array of shape (E, 2) representing directed edges.
+        edge_weights (np.ndarray, optional): An array of shape (E,) with edge weights
+                                             to annotate the graph.
     """
     g = nx.DiGraph()
     g.add_nodes_from(range(n))
@@ -92,7 +93,20 @@ def plot_directed_graph(n: int, edges: np.ndarray, edge_weights: np.ndarray = No
     plt.tight_layout()
     plt.savefig("graph_test.png")
 
-def get_connected_graph(weights: np.ndarray, min_edges: int = 2):
+
+def get_connected_graph(weights: np.ndarray, min_edges: int = 2) -> Tuple["ReducedGraph", np.ndarray]:
+    """
+    Iteratively selects the smallest set of strongest edges that results in a connected undirected graph.
+
+    Args:
+        weights (np.ndarray): A square 2D array representing the weighted adjacency matrix.
+        min_edges (int): Minimum number of edges to start the connectivity search.
+
+    Returns:
+        Tuple[ReducedGraph, np.ndarray]:
+            - ReducedGraph: An object encapsulating the selected edge set.
+            - np.ndarray: The associated edge weights.
+    """
     n = weights.shape[0]
     max_edges = min_edges
     while True:
@@ -102,10 +116,23 @@ def get_connected_graph(weights: np.ndarray, min_edges: int = 2):
         max_edges += 1
     return ReducedGraph(reduced_edges), reduced_weights
 
-class ReducedGraph():
-    edges_value: Any
-    def __init__(self, edges_value) -> None:
-        self.edges_value = edges_value
-    def edges(self):
-        return self.edges_value
 
+class ReducedGraph:
+    """
+    A lightweight container class for storing and exposing a reduced edge set.
+
+    Attributes:
+        _edges (Any): Internal storage of the edge array.
+    """
+
+    def __init__(self, edges: Any) -> None:
+        self._edges = edges
+
+    def edges(self) -> Any:
+        """
+        Returns the stored edges.
+
+        Returns:
+            Any: The array of edges.
+        """
+        return self._edges
