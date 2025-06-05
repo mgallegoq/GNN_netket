@@ -16,17 +16,17 @@ sa = nk.sampler.MetropolisLocal(hi)
 
 
 # Disordered Heisenberg model (example)
-J = np.random.normal(0, 1, (N, N))
+J = np.load('reference_couplings.npy')
 g, reduced_weights = get_connected_graph(J, min_edges=N // 10)
 H = -sum(sum(J[i, j]*sigmaz(hi, i)*sigmaz(hi, j) for i in range(N)) for j in range(N))
 H += -0.5*sum(sigmax(hi, i) for i in range(N))
 
-# SymGNN 1.04s/it, Energy=-16.4106 ± 0.0034 [σ²=0.0093, R̂=1.0183]]]
+# SymGNN 2.45s/it, Energy=-66.04 ± 0.0034 [σ²=0.0033, R̂=1.0123]]]
 model = SymGNN(
 graph = g,
 couplings = tuple(reduced_weights),
 layers= 3,
-features = 30,
+features = 20,
 use_attention=False,
 output_phase=True
 )
