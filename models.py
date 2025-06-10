@@ -12,14 +12,13 @@ Classes:
                          spin configurations to log wavefunction amplitudes.
 """
 
+from typing import Any, Callable, Sequence
 
-import netket as nk
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
 from jax.scipy.special import logsumexp
-from typing import Sequence, Callable, Any
-from jax.scipy.special import logsumexp
+from netket.graph import AbstractGraph
 
 REAL_DTYPE = jnp.asarray(1.0).dtype
 
@@ -48,6 +47,7 @@ class FFN(nn.Module):
     alpha represents the number of hidden units in each layer and mu the number of layers
     The parameters (weights and biases) are defined as complex.
     """
+
     alpha: int = 1
     mu: int = 1
     output_size: int = 0
@@ -145,15 +145,32 @@ Classes:
 """
 
 
-import netket as nk
-import jax
-import jax.numpy as jnp
-import flax.linen as nn
-from jax.scipy.special import logsumexp
-from typing import Sequence, Callable, Any
-from jax.scipy.special import logsumexp
-
 REAL_DTYPE = jnp.asarray(1.0).dtype
+
+
+from flax import linen as nn
+import jax.numpy as jnp
+
+class LearnedGraph(nn.Module):
+    coupling_matrix: Any  # shape: (N, N) in tuple form
+    n_nodes: int
+    tol: float = 1e-1
+
+    @nn.compact
+    def __call__(self):
+
+        raw_mapping = self.param(
+            "alpha", nn.initializers.normal(0.1), (self.n_nodes, self.n_nodes)
+        )
+        sym_mapping = 0.5 * (raw_mapping + raw_mapping.T)
+        weighted = sym_mapping * self.coupling_matrix
+       
+        mask = jnp.where(abs(weighted) > self.tol, True, False)
+
+        senders, receivers = jnp.argwhere(mask is True)
+        edge_weights = weighted[mask]
+
+        return senders, receivers, edge_weights
 
 
 
@@ -175,7 +192,7 @@ class AttentionGNNLayer(nn.Module):
     """
 
     out_features: int
-    couplings: Sequence
+    couplings_array: Sequence
     senders: Any
     receivers: Any
     layers: int = 1
@@ -189,7 +206,7 @@ class AttentionGNNLayer(nn.Module):
             receiver_features = h_embd[self.receivers, :]  # shape (num_edges, n_embd)
             sender_features = h_embd[self.senders, :]  # same shape
             mod_couplings = jnp.concatenate(
-                (jnp.array(self.couplings), jnp.array(self.couplings))
+                (jnp.array(self.couplings_array), jnp.array(self.couplings_array))
             )[
                 :, None
             ]  # (num_edges, 1)
@@ -198,7 +215,9 @@ class AttentionGNNLayer(nn.Module):
             )  # (num_edges, 2 * n_embd)
 
             # Apply MLP once on whole array:
-            messages = FFN(1, 1, self.out_features)(edge_features)  # (num_edges, out_features)
+            messages = FFN(1, 1, self.out_features)(
+                edge_features
+            )  # (num_edges, out_features)
             if self.use_attention:
                 q = nn.Dense(self.out_features)(sender_features)
                 k = nn.Dense(self.out_features)(receiver_features)
@@ -262,15 +281,16 @@ class GraphAttentionGNN(nn.Module):
         h = (h + 1) // 2
         h = h.astype(int)
         h_embd = nn.Embed(2, self.n_embd)(h)
-        senders = jnp.concatenate(
-            (jnp.array(self.graph.edges())[:, 0], jnp.array(self.graph.edges())[:, 1])
-        )
-        receivers = jnp.concatenate(
-            (jnp.array(self.graph.edges())[:, 1], jnp.array(self.graph.edges())[:, 0])
-        )
+        n_nodes = self.graph.n_nodes
+        coupling_array = jnp.zeros((n_nodes, n_nodes))
+        for i, j, v in self.couplings:
+            coupling_array = coupling_array.at[i, j].set(v)
+        senders, receivers, weights = LearnedGraph(coupling_matrix=coupling_array,
+                                                   n_nodes = n_nodes)()
+        print(self.couplings)
         h_embd = AttentionGNNLayer(
             self.features,
-            self.couplings,
+            weights,
             senders,
             receivers,
             layers=self.layers,
@@ -368,6 +388,3 @@ class SymGNN(nn.Module):
             ),
             axis=0,
         )
-
-
-

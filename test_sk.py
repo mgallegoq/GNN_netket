@@ -52,7 +52,18 @@ red_g.add_edges_from(g.edges())
 print(f'Graphs density: {nx.density(red_g)}')
 H = -sum(sum(J[i, j]*sigmaz(hi, i)*sigmaz(hi, j) for i in range(N)) for j in range(N))
 H += -0.5*sum(sigmax(hi, i) for i in range(N))
+reduced_weights = np.zeros((N, N))
+adj_mat = g.adjacency_matrix()
+entries = []
 
+for i in range(N):
+    for j in range(i, N):
+        if adj_mat[i, j] == 1:
+            weight = J[i, j] + J[j, i]
+            entries.append((i, j, weight))
+
+# Convert to a hashable tuple
+reduced_weights = tuple(entries)
 # SymGNN 3s/it, Energy=-66.9443 ± 0.0034 [σ²=0.0034, R̂=1.0183]]]
 model = SymGNN(
 graph = g,

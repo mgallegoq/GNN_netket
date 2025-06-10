@@ -17,6 +17,7 @@ from typing import Tuple, Any
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import netket as nk
 
 
 def top_m_edges_directed(weights: np.ndarray, m: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -127,7 +128,8 @@ class ReducedGraph:
 
     def __init__(self, edges: Any) -> None:
         self._edges = edges
-
+        self.n_nodes = int(np.max(self._edges)) + 1
+    
     def edges(self) -> Any:
         """
         Returns the stored edges.
@@ -136,3 +138,9 @@ class ReducedGraph:
             Any: The array of edges.
         """
         return self._edges
+    def adjacency_matrix(self) -> Any:
+        adj = np.zeros((self.n_nodes, self.n_nodes))
+        for i, j in self._edges:
+            adj[i, j] = 1
+            adj[j, i] = 1
+        return adj   
